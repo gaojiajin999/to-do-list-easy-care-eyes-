@@ -13,6 +13,49 @@
   margin: 0 auto;
 }
 
+.auth-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  gap: 28px;
+  width: min(1040px, 100%);
+  min-height: calc(100vh - 64px);
+  margin: 0 auto;
+  align-items: center;
+}
+
+.auth-copy p:not(.eyebrow) {
+  max-width: 620px;
+  margin: 18px 0 0;
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1.7;
+}
+
+.auth-panel,
+.loading-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 252, 0.88);
+  box-shadow: 0 18px 42px rgba(23, 49, 58, 0.07);
+  backdrop-filter: blur(12px);
+}
+
+.auth-panel {
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+}
+
+.loading-panel {
+  display: grid;
+  width: min(520px, 100%);
+  min-height: 180px;
+  margin: 18vh auto 0;
+  place-items: center;
+  color: var(--accent-deep);
+  font-weight: 800;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -44,6 +87,13 @@ h1 {
   line-height: 1.05;
 }
 
+.account-line {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+}
+
 h2 {
   color: var(--ink);
   font-size: 22px;
@@ -65,6 +115,12 @@ button {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.68;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .ghost-button,
@@ -102,6 +158,24 @@ button:disabled {
 .primary-button:hover {
   transform: translateY(-1px);
   box-shadow: 0 16px 28px rgba(36, 139, 136, 0.24);
+}
+
+.status-message {
+  margin: 0;
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.status-message.success {
+  color: #2f7657;
+  background: var(--success-soft);
+}
+
+.status-message.error {
+  color: #9a4a3f;
+  background: var(--danger-soft);
 }
 
 .summary-grid {
@@ -459,6 +533,21 @@ body.dragging-tasks .task-item {
 
   .topbar,
   .panel-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .auth-layout {
+    grid-template-columns: 1fr;
+    min-height: auto;
+    align-items: start;
+  }
+
+  .auth-copy p:not(.eyebrow) {
+    font-size: 16px;
+  }
+
+  .topbar-actions {
     align-items: stretch;
     flex-direction: column;
   }
