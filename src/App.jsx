@@ -25,6 +25,27 @@ const filterOptions = [
   ['all', '全部'],
 ]
 
+function getAuthErrorMessage(error) {
+  const rawMessage = error?.message || ''
+  const lowerMessage = rawMessage.toLowerCase()
+
+  if (lowerMessage.includes('redirect') || lowerMessage.includes('not allowed')) {
+    return `登录链接发送失败：Supabase 不允许当前回跳地址。原始错误：${rawMessage}`
+  }
+
+  if (lowerMessage.includes('rate') || lowerMessage.includes('security purposes')) {
+    return `登录链接发送失败：Supabase 邮件发送太频繁，请稍等后再试。原始错误：${rawMessage}`
+  }
+
+  if (lowerMessage.includes('email')) {
+    return `登录链接发送失败：请检查邮箱登录或邮件发送设置。原始错误：${rawMessage}`
+  }
+
+  return rawMessage
+    ? `登录链接发送失败。原始错误：${rawMessage}`
+    : '登录链接发送失败，请检查邮箱或 Supabase Auth 配置。'
+}
+
 const defaultForm = {
   title: '',
   notes: '',
@@ -394,7 +415,7 @@ function App() {
     })
 
     if (error) {
-      setAuthError('登录链接发送失败，请检查邮箱或 Supabase Auth 配置。')
+      setAuthError(getAuthErrorMessage(error))
     } else {
       setAuthMessage('登录链接已发送，请打开邮箱完成登录。')
     }
