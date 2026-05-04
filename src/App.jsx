@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { isSupabaseConfigured, supabase } from './lib/supabaseClient'
 import './App.css'
 
+const ROOM_STORAGE_KEY = 'remindly-room'
 const ORDER_STEP = 1000
 const LONG_PRESS_DELAY = 300
 const DRAG_CANCEL_DISTANCE = 8
@@ -24,27 +25,6 @@ const filterOptions = [
   ['done', '已完成'],
   ['all', '全部'],
 ]
-
-function getAuthErrorMessage(error) {
-  const rawMessage = error?.message || ''
-  const lowerMessage = rawMessage.toLowerCase()
-
-  if (lowerMessage.includes('redirect') || lowerMessage.includes('not allowed')) {
-    return `登录链接发送失败：Supabase 不允许当前回跳地址。原始错误：${rawMessage}`
-  }
-
-  if (lowerMessage.includes('rate') || lowerMessage.includes('security purposes')) {
-    return `登录链接发送失败：Supabase 邮件发送太频繁，请稍等后再试。原始错误：${rawMessage}`
-  }
-
-  if (lowerMessage.includes('email')) {
-    return `登录链接发送失败：请检查邮箱登录或邮件发送设置。原始错误：${rawMessage}`
-  }
-
-  return rawMessage
-    ? `登录链接发送失败。原始错误：${rawMessage}`
-    : '登录链接发送失败，请检查邮箱或 Supabase Auth 配置。'
-}
 
 const defaultForm = {
   title: '',
@@ -83,6 +63,29 @@ function fromDatabaseTask(task) {
     createdAt: task.created_at,
     order: Number.isFinite(task.sort_order) ? task.sort_order : 0,
   }
+}
+
+async function hashRoomCode(roomCode) {
+  const normalizedCode = roomCode.trim().toLowerCase()
+  const bytes = new TextEncoder().encode(normalizedCode)
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+function loadSavedRoom() {
+  try {
+    const saved = localStorage.getItem(ROOM_STORAGE_KEY)
+    return saved ? JSON.parse(saved) : null
+  } catch {
+    return null
+  }
+}
+
+function saveRoom(room) {
+  localStorage.setItem(ROOM_STORAGE_KEY, JSON.stringify(room))
 }
 
 function getTaskState(task) {
@@ -134,9 +137,9 @@ function upsertTask(currentTasks, nextTask) {
   return [...mergedTasks].sort(compareTaskOrder)
 }
 
-function getNotifiedTaskIds(userId) {
+function getNotifiedTaskIds(roomId) {
   try {
-    const saved = localStorage.getItem(`remindly-notified-${userId}`)
+    const saved = localStorage.getItem(`remindly-notified-${roomId}`)
     const parsedIds = saved ? JSON.parse(saved) : []
     return Array.isArray(parsedIds) ? new Set(parsedIds) : new Set()
   } catch {
@@ -144,21 +147,21 @@ function getNotifiedTaskIds(userId) {
   }
 }
 
-function saveNotifiedTaskIds(userId, ids) {
-  localStorage.setItem(`remindly-notified-${userId}`, JSON.stringify([...ids]))
+function saveNotifiedTaskIds(roomId, ids) {
+  localStorage.setItem(`remindly-notified-${roomId}`, JSON.stringify([...ids]))
 }
 
-function AuthPanel({ authMessage, authError, onSignIn }) {
-  const [email, setEmail] = useState('')
+function RoomPanel({ roomError, onEnterRoom }) {
+  const [roomCode, setRoomCode] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   async function handleSubmit(event) {
     event.preventDefault()
-    const cleanEmail = email.trim()
-    if (!cleanEmail) return
+    const cleanCode = roomCode.trim()
+    if (!cleanCode) return
 
     setIsSubmitting(true)
-    await onSignIn(cleanEmail)
+    await onEnterRoom(cleanCode)
     setIsSubmitting(false)
   }
 
@@ -167,29 +170,30 @@ function AuthPanel({ authMessage, authError, onSignIn }) {
       <section className="auth-layout">
         <div className="auth-copy">
           <p className="eyebrow">Todo Reminder</p>
-          <h1>登录后，在电脑和 iPhone 上同步你的待办</h1>
+          <h1>输入房间码，在电脑和 iPhone 上同步待办</h1>
           <p>
-            输入邮箱获取登录链接。同一个账号在不同设备打开公网地址后，会自动同步任务列表和完成状态。
+            不需要邮箱登录。电脑和手机输入同一个房间码，就会进入同一份待办列表。
+            建议使用不容易猜到的房间码，例如 jj-todo-2026-9x7k。
           </p>
         </div>
         <form className="auth-panel" onSubmit={handleSubmit}>
-          <h2>邮箱登录</h2>
+          <h2>房间码同步</h2>
           <label>
-            邮箱地址
+            房间码
             <input
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="you@example.com"
-              autoComplete="email"
+              value={roomCode}
+              onChange={(event) => setRoomCode(event.target.value)}
+              placeholder="例如：jj-todo-2026-9x7k"
+              autoComplete="off"
+              minLength="4"
               required
             />
           </label>
           <button className="primary-button" type="submit" disabled={isSubmitting}>
-            {isSubmitting ? '正在发送...' : '发送登录链接'}
+            {isSubmitting ? '正在进入...' : '进入同步房间'}
           </button>
-          {authMessage ? <p className="status-message success">{authMessage}</p> : null}
-          {authError ? <p className="status-message error">{authError}</p> : null}
+          <p className="room-hint">房间码只保存在你的设备上，数据库里只保存加密后的房间标识。</p>
+          {roomError ? <p className="status-message error">{roomError}</p> : null}
         </form>
       </section>
     </main>
@@ -214,16 +218,14 @@ function SetupPanel() {
 }
 
 function App() {
-  const [session, setSession] = useState(null)
-  const [isSessionLoading, setIsSessionLoading] = useState(isSupabaseConfigured)
+  const [room, setRoom] = useState(loadSavedRoom)
+  const [roomError, setRoomError] = useState('')
   const [tasks, setTasks] = useState([])
   const [form, setForm] = useState(defaultForm)
   const [filter, setFilter] = useState('active')
   const [dragState, setDragState] = useState(null)
   const [isTasksLoading, setIsTasksLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
-  const [authMessage, setAuthMessage] = useState('')
-  const [authError, setAuthError] = useState('')
   const [notificationStatus, setNotificationStatus] = useState(
     'Notification' in window ? Notification.permission : 'unsupported',
   )
@@ -231,8 +233,6 @@ function App() {
   const pendingDragRef = useRef(null)
   const activeDragRef = useRef(null)
   const audioContextRef = useRef(null)
-
-  const user = session?.user
 
   const cancelPendingDrag = useCallback(() => {
     if (pendingDragRef.current?.timerId) {
@@ -248,40 +248,10 @@ function App() {
   }, [cancelPendingDrag])
 
   useEffect(() => {
-    if (!isSupabaseConfigured) {
-      return undefined
-    }
+    if (!room?.id) return undefined
 
     let isMounted = true
-
-    supabase.auth.getSession().then(({ data }) => {
-      if (!isMounted) return
-      setSession(data.session)
-      setIsSessionLoading(false)
-    })
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession)
-      if (!nextSession) {
-        setTasks([])
-        setForm(defaultForm)
-      }
-      setIsSessionLoading(false)
-    })
-
-    return () => {
-      isMounted = false
-      subscription.unsubscribe()
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!user) return undefined
-
-    let isMounted = true
-    const userId = user.id
+    const roomId = room.id
 
     async function loadTasks() {
       setIsTasksLoading(true)
@@ -290,13 +260,13 @@ function App() {
       const { data, error } = await supabase
         .from('tasks')
         .select('*')
-        .eq('user_id', userId)
+        .eq('room_id', roomId)
         .order('sort_order', { ascending: true })
 
       if (!isMounted) return
 
       if (error) {
-        setErrorMessage('任务加载失败，请检查 Supabase 表结构和权限策略。')
+        setErrorMessage('任务加载失败，请先在 Supabase 执行新的房间码 SQL。')
       } else {
         setTasks((data || []).map(fromDatabaseTask).sort(compareTaskOrder))
       }
@@ -307,14 +277,14 @@ function App() {
     loadTasks()
 
     const channel = supabase
-      .channel(`tasks-${userId}`)
+      .channel(`tasks-room-${roomId}`)
       .on(
         'postgres_changes',
         {
           event: '*',
           schema: 'public',
           table: 'tasks',
-          filter: `user_id=eq.${userId}`,
+          filter: `room_id=eq.${roomId}`,
         },
         (payload) => {
           if (payload.eventType === 'DELETE') {
@@ -335,7 +305,7 @@ function App() {
       isMounted = false
       supabase.removeChannel(channel)
     }
-  }, [user])
+  }, [room])
 
   useEffect(() => {
     document.body.classList.toggle('dragging-tasks', Boolean(dragState))
@@ -353,10 +323,10 @@ function App() {
   }, [cancelDrag])
 
   useEffect(() => {
-    if (!user) return undefined
+    if (!room?.id) return undefined
 
     const timer = window.setInterval(() => {
-      const notifiedTaskIds = getNotifiedTaskIds(user.id)
+      const notifiedTaskIds = getNotifiedTaskIds(room.id)
       const now = Date.now()
       let didNotify = false
 
@@ -377,11 +347,11 @@ function App() {
         didNotify = true
       })
 
-      if (didNotify) saveNotifiedTaskIds(user.id, notifiedTaskIds)
+      if (didNotify) saveNotifiedTaskIds(room.id, notifiedTaskIds)
     }, 15000)
 
     return () => window.clearInterval(timer)
-  }, [tasks, user])
+  }, [tasks, room])
 
   const stats = useMemo(() => {
     const active = tasks.filter((task) => !task.completed).length
@@ -403,28 +373,30 @@ function App() {
       .sort(compareTaskOrder)
   }, [filter, tasks])
 
-  async function signInWithEmail(email) {
-    setAuthMessage('')
-    setAuthError('')
-
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: window.location.origin,
-      },
-    })
-
-    if (error) {
-      setAuthError(getAuthErrorMessage(error))
-    } else {
-      setAuthMessage('登录链接已发送，请打开邮箱完成登录。')
+  async function enterRoom(roomCode) {
+    try {
+      const roomId = await hashRoomCode(roomCode)
+      const nextRoom = {
+        id: roomId,
+        label: roomCode,
+      }
+      saveRoom(nextRoom)
+      setRoom(nextRoom)
+      setTasks([])
+      setForm(defaultForm)
+      setRoomError('')
+    } catch {
+      setRoomError('进入房间失败，请确认当前浏览器支持安全加密 API。')
     }
   }
 
-  async function signOut() {
+  function leaveRoom() {
     cancelDrag()
+    localStorage.removeItem(ROOM_STORAGE_KEY)
+    setRoom(null)
+    setTasks([])
+    setForm(defaultForm)
     setErrorMessage('')
-    await supabase.auth.signOut()
   }
 
   function updateForm(field, value) {
@@ -433,7 +405,7 @@ function App() {
 
   async function addTask(event) {
     event.preventDefault()
-    if (!user) return
+    if (!room?.id) return
 
     const title = form.title.trim()
     if (!title) return
@@ -443,7 +415,7 @@ function App() {
       0,
     )
     const nextTask = {
-      user_id: user.id,
+      room_id: room.id,
       title,
       notes: form.notes.trim() || null,
       due_at: toDatabaseDate(form.dueAt),
@@ -458,7 +430,7 @@ function App() {
     const { data, error } = await supabase.from('tasks').insert(nextTask).select().single()
 
     if (error) {
-      setErrorMessage('添加失败，请稍后再试。')
+      setErrorMessage('添加失败，请确认 Supabase 已执行新的房间码 SQL。')
       setForm({ ...defaultForm, title, notes: form.notes, dueAt: form.dueAt, priority: form.priority })
     } else if (data) {
       setTasks((currentTasks) => upsertTask(currentTasks, fromDatabaseTask(data)))
@@ -516,7 +488,7 @@ function App() {
 
   async function toggleTask(id) {
     const taskToToggle = tasks.find((task) => task.id === id)
-    if (!taskToToggle) return
+    if (!taskToToggle || !room?.id) return
 
     if (!taskToToggle.completed) {
       void playCompletionSound()
@@ -533,6 +505,7 @@ function App() {
       .from('tasks')
       .update({ completed: !taskToToggle.completed })
       .eq('id', id)
+      .eq('room_id', room.id)
 
     if (error) {
       setErrorMessage('更新任务失败，请刷新后再试。')
@@ -545,12 +518,14 @@ function App() {
   }
 
   async function deleteTask(id) {
+    if (!room?.id) return
+
     const previousTasks = tasks
     cancelDrag()
     setTasks((currentTasks) => currentTasks.filter((task) => task.id !== id))
     setErrorMessage('')
 
-    const { error } = await supabase.from('tasks').delete().eq('id', id)
+    const { error } = await supabase.from('tasks').delete().eq('id', id).eq('room_id', room.id)
 
     if (error) {
       setErrorMessage('删除任务失败，请刷新后再试。')
@@ -632,6 +607,8 @@ function App() {
   }
 
   async function reorderVisibleTasks(taskId, targetIndex) {
+    if (!room?.id) return
+
     const visibleIds = visibleTasks.map((task) => task.id)
     const sourceIndex = visibleIds.indexOf(taskId)
     if (sourceIndex === -1) return
@@ -658,7 +635,7 @@ function App() {
 
     const updates = nextTasks.map((task) => ({
       id: task.id,
-      user_id: user.id,
+      room_id: room.id,
       title: task.title,
       notes: task.notes || null,
       due_at: toDatabaseDate(task.dueAt),
@@ -686,22 +663,8 @@ function App() {
 
   if (!isSupabaseConfigured) return <SetupPanel />
 
-  if (isSessionLoading) {
-    return (
-      <main className="app-shell">
-        <section className="loading-panel">正在连接同步服务...</section>
-      </main>
-    )
-  }
-
-  if (!user) {
-    return (
-      <AuthPanel
-        authMessage={authMessage}
-        authError={authError}
-        onSignIn={signInWithEmail}
-      />
-    )
+  if (!room) {
+    return <RoomPanel roomError={roomError} onEnterRoom={enterRoom} />
   }
 
   return (
@@ -711,7 +674,7 @@ function App() {
           <div>
             <p className="eyebrow">Todo Reminder</p>
             <h1>待办事项提醒工具</h1>
-            <p className="account-line">已登录：{user.email}</p>
+            <p className="account-line">当前房间：{room.label}</p>
           </div>
           <div className="topbar-actions">
             <button
@@ -722,8 +685,8 @@ function App() {
             >
               {notificationStatus === 'granted' ? '提醒已开启' : '开启浏览器提醒'}
             </button>
-            <button type="button" className="ghost-button" onClick={signOut}>
-              退出登录
+            <button type="button" className="ghost-button" onClick={leaveRoom}>
+              切换房间
             </button>
           </div>
         </header>

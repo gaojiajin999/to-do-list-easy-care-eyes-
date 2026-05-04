@@ -1,6 +1,8 @@
 # Todo Reminder
 
-一个支持邮箱登录、多端同步的待办提醒应用。前端使用 React + Vite，登录、数据库和实时同步使用 Supabase。
+一个支持公网访问、多端同步的待办提醒应用。前端使用 React + Vite，数据存储和实时同步使用 Supabase。
+
+现在的同步方式是“共享房间码”：电脑和 iPhone 输入同一个房间码，就会进入同一份待办列表。应用不再使用邮箱 magic link，因此不会触发 Supabase 邮件发送频率限制。
 
 ## 本地运行
 
@@ -33,10 +35,10 @@ npm run dev
 
 ## Supabase 配置
 
-- Authentication 中开启邮箱登录。
-- URL Configuration 的 Site URL 本地可填 `http://localhost:5173`，部署后改成 Vercel 公网地址。
-- Additional Redirect URLs 同时加入本地地址和 Vercel 地址。
-- Database 的 Replication/Reatime 需要包含 `public.tasks`。`supabase/schema.sql` 已包含相关 SQL。
+- 在 SQL Editor 中执行 `supabase/schema.sql`。
+- `tasks` 表使用 `room_id` 区分不同房间。
+- 前端会把房间码通过 SHA-256 转换为 `room_id`，不会把原始房间码写入数据库。
+- 这是共享房间方案：知道同一个房间码的人都可以访问同一份待办，请使用不容易猜到的房间码。
 
 ## 部署到 Vercel
 
@@ -49,7 +51,7 @@ VITE_SUPABASE_URL
 VITE_SUPABASE_ANON_KEY
 ```
 
-4. 部署完成后，把 Vercel 域名填回 Supabase Auth 的 Site URL 和 Redirect URLs。
+4. 部署完成后，打开 Vercel 公网地址，在电脑和 iPhone 输入同一个房间码。
 
 ## 常用命令
 

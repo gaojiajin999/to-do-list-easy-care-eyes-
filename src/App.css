@@ -178,6 +178,13 @@ button:disabled {
   background: var(--danger-soft);
 }
 
+.room-hint {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
