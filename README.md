@@ -53,6 +53,21 @@ VITE_SUPABASE_ANON_KEY
 
 4. 部署完成后，打开 Vercel 公网地址，在电脑和 iPhone 输入同一个房间码。
 
+## 安装到 iPhone 主屏幕
+
+1. 用 iPhone Safari 打开：
+
+```text
+https://to-do-list-easy-care-eyes.vercel.app
+```
+
+2. 点底部分享按钮。
+3. 选择“添加到主屏幕”。
+4. 从主屏幕上的 `Todo Reminder` 图标打开。
+5. 输入房间码并勾选“记住房间码，下次自动进入”。
+
+注意：中国大陆运营商直连 Vercel 可能仍需 VPN。PWA 只负责安装体验，不改变网络可达性。
+
 ## 常用命令
 
 ```bash
