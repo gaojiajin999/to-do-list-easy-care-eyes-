@@ -153,6 +153,7 @@ function saveNotifiedTaskIds(roomId, ids) {
 
 function RoomPanel({ roomError, onEnterRoom }) {
   const [roomCode, setRoomCode] = useState('')
+  const [rememberRoom, setRememberRoom] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   async function handleSubmit(event) {
@@ -161,7 +162,7 @@ function RoomPanel({ roomError, onEnterRoom }) {
     if (!cleanCode) return
 
     setIsSubmitting(true)
-    await onEnterRoom(cleanCode)
+    await onEnterRoom(cleanCode, rememberRoom)
     setIsSubmitting(false)
   }
 
@@ -192,6 +193,14 @@ function RoomPanel({ roomError, onEnterRoom }) {
           <button className="primary-button" type="submit" disabled={isSubmitting}>
             {isSubmitting ? '正在进入...' : '进入同步房间'}
           </button>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={rememberRoom}
+              onChange={(event) => setRememberRoom(event.target.checked)}
+            />
+            记住房间码，下次自动进入
+          </label>
           <p className="room-hint">房间码只保存在你的设备上，数据库里只保存加密后的房间标识。</p>
           {roomError ? <p className="status-message error">{roomError}</p> : null}
         </form>
@@ -373,14 +382,18 @@ function App() {
       .sort(compareTaskOrder)
   }, [filter, tasks])
 
-  async function enterRoom(roomCode) {
+  async function enterRoom(roomCode, rememberRoom = true) {
     try {
       const roomId = await hashRoomCode(roomCode)
       const nextRoom = {
         id: roomId,
         label: roomCode,
       }
-      saveRoom(nextRoom)
+      if (rememberRoom) {
+        saveRoom(nextRoom)
+      } else {
+        localStorage.removeItem(ROOM_STORAGE_KEY)
+      }
       setRoom(nextRoom)
       setTasks([])
       setForm(defaultForm)
@@ -397,6 +410,17 @@ function App() {
     setTasks([])
     setForm(defaultForm)
     setErrorMessage('')
+  }
+
+  async function copyRoomCode() {
+    if (!room?.label) return
+
+    try {
+      await navigator.clipboard.writeText(room.label)
+      setErrorMessage('')
+    } catch {
+      setErrorMessage('复制房间码失败，请手动复制顶部显示的房间码。')
+    }
   }
 
   function updateForm(field, value) {
@@ -684,6 +708,9 @@ function App() {
               disabled={notificationStatus === 'granted' || notificationStatus === 'unsupported'}
             >
               {notificationStatus === 'granted' ? '提醒已开启' : '开启浏览器提醒'}
+            </button>
+            <button type="button" className="ghost-button" onClick={copyRoomCode}>
+              复制房间码
             </button>
             <button type="button" className="ghost-button" onClick={leaveRoom}>
               切换房间

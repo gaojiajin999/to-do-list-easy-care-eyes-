@@ -185,6 +185,21 @@ button:disabled {
   line-height: 1.5;
 }
 
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.checkbox-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
