@@ -8,10 +8,12 @@
     "dev:lan": "vite --host 0.0.0.0",
     "build": "vite build",
     "lint": "eslint .",
+    "analytics:server": "node scripts/task-analytics-server.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.1",
+    "exceljs": "^4.4.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
   },

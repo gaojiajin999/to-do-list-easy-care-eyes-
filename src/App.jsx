@@ -26,6 +26,13 @@ const filterOptions = [
   ['all', '全部'],
 ]
 
+const taskTimeSections = [
+  { id: 'morning', label: '\u65e9\u4e0a', alwaysShow: true },
+  { id: 'afternoon', label: '\u4e0b\u5348', alwaysShow: true },
+  { id: 'evening', label: '\u665a\u4e0a', alwaysShow: true },
+  { id: 'untimed', label: '\u672a\u8bbe\u7f6e\u65f6\u95f4', alwaysShow: false },
+]
+
 const defaultForm = {
   title: '',
   notes: '',
@@ -101,6 +108,18 @@ function getTaskState(task) {
   return 'open'
 }
 
+function getTaskTimeSectionId(task) {
+  if (!task.dueAt) return 'untimed'
+
+  const date = new Date(task.dueAt)
+  if (Number.isNaN(date.getTime())) return 'untimed'
+
+  const hour = date.getHours()
+  if (hour < 12) return 'morning'
+  if (hour < 18) return 'afternoon'
+  return 'evening'
+}
+
 function formatDueTime(value) {
   if (!value) return '未设置提醒'
 
@@ -125,6 +144,18 @@ function compareTaskOrder(a, b) {
 
   if (safeDueA !== safeDueB) return safeDueA - safeDueB
   return new Date(a.createdAt || 0) - new Date(b.createdAt || 0)
+}
+
+function compareTaskDisplayTime(a, b) {
+  const dueA = new Date(a.dueAt).getTime()
+  const dueB = new Date(b.dueAt).getTime()
+  const hasDueA = !Number.isNaN(dueA)
+  const hasDueB = !Number.isNaN(dueB)
+
+  if (hasDueA && hasDueB && dueA !== dueB) return dueA - dueB
+  if (hasDueA !== hasDueB) return hasDueA ? -1 : 1
+
+  return compareTaskOrder(a, b)
 }
 
 function upsertTask(currentTasks, nextTask) {
@@ -235,6 +266,8 @@ function App() {
   const [dragState, setDragState] = useState(null)
   const [isTasksLoading, setIsTasksLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
+  const [analyticsServiceStatus, setAnalyticsServiceStatus] = useState('checking')
+  const [isStartupHelpOpen, setIsStartupHelpOpen] = useState(false)
   const [notificationStatus, setNotificationStatus] = useState(
     'Notification' in window ? Notification.permission : 'unsupported',
   )
@@ -255,6 +288,18 @@ function App() {
     activeDragRef.current = null
     setDragState(null)
   }, [cancelPendingDrag])
+
+  const checkAnalyticsService = useCallback(async () => {
+    setAnalyticsServiceStatus('checking')
+
+    try {
+      const response = await fetch('http://127.0.0.1:8787/health')
+      const result = await response.json()
+      setAnalyticsServiceStatus(response.ok && result.ok ? 'online' : 'offline')
+    } catch {
+      setAnalyticsServiceStatus('offline')
+    }
+  }, [])
 
   useEffect(() => {
     if (!room?.id) return undefined
@@ -332,6 +377,28 @@ function App() {
   }, [cancelDrag])
 
   useEffect(() => {
+    let isMounted = true
+
+    async function loadAnalyticsServiceStatus() {
+      try {
+        const response = await fetch('http://127.0.0.1:8787/health')
+        const result = await response.json()
+        if (isMounted) {
+          setAnalyticsServiceStatus(response.ok && result.ok ? 'online' : 'offline')
+        }
+      } catch {
+        if (isMounted) setAnalyticsServiceStatus('offline')
+      }
+    }
+
+    void loadAnalyticsServiceStatus()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  useEffect(() => {
     if (!room?.id) return undefined
 
     const timer = window.setInterval(() => {
@@ -381,6 +448,35 @@ function App() {
       })
       .sort(compareTaskOrder)
   }, [filter, tasks])
+
+  const groupedTaskSections = useMemo(() => {
+    const tasksBySection = new Map(taskTimeSections.map((section) => [section.id, []]))
+
+    visibleTasks.forEach((task) => {
+      const sectionId = getTaskTimeSectionId(task)
+      tasksBySection.get(sectionId)?.push(task)
+    })
+
+    return taskTimeSections
+      .map((section) => ({
+        ...section,
+        tasks:
+          section.id === 'untimed'
+            ? tasksBySection.get(section.id) || []
+            : [...(tasksBySection.get(section.id) || [])].sort(compareTaskDisplayTime),
+      }))
+      .filter((section) => section.alwaysShow || section.tasks.length > 0)
+  }, [visibleTasks])
+
+  const renderedVisibleTasks = useMemo(
+    () => groupedTaskSections.flatMap((section) => section.tasks),
+    [groupedTaskSections],
+  )
+
+  const renderedTaskIndexes = useMemo(
+    () => new Map(renderedVisibleTasks.map((task, index) => [task.id, index])),
+    [renderedVisibleTasks],
+  )
 
   async function enterRoom(roomCode, rememberRoom = true) {
     try {
@@ -510,6 +606,20 @@ function App() {
     }
   }
 
+  async function notifyAnalyticsSync(roomId) {
+    try {
+      await fetch('http://127.0.0.1:8787/sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ roomId }),
+      })
+    } catch {
+      // Local analytics sync is optional; the todo update should never depend on it.
+    }
+  }
+
   async function toggleTask(id) {
     const taskToToggle = tasks.find((task) => task.id === id)
     if (!taskToToggle || !room?.id) return
@@ -538,6 +648,8 @@ function App() {
           task.id === id ? { ...task, completed: taskToToggle.completed } : task,
         ),
       )
+    } else if (!taskToToggle.completed) {
+      void notifyAnalyticsSync(room.id)
     }
   }
 
@@ -573,15 +685,15 @@ function App() {
   }
 
   function getDropIndex(clientY) {
-    for (let index = 0; index < visibleTasks.length; index += 1) {
-      const node = taskItemRefs.current.get(visibleTasks[index].id)
+    for (let index = 0; index < renderedVisibleTasks.length; index += 1) {
+      const node = taskItemRefs.current.get(renderedVisibleTasks[index].id)
       if (!node) continue
 
       const rect = node.getBoundingClientRect()
       if (clientY < rect.top + rect.height / 2) return index
     }
 
-    return visibleTasks.length
+    return renderedVisibleTasks.length
   }
 
   function startDrag(taskId, pointerId, startY, clientY) {
@@ -633,7 +745,7 @@ function App() {
   async function reorderVisibleTasks(taskId, targetIndex) {
     if (!room?.id) return
 
-    const visibleIds = visibleTasks.map((task) => task.id)
+    const visibleIds = renderedVisibleTasks.map((task) => task.id)
     const sourceIndex = visibleIds.indexOf(taskId)
     if (sourceIndex === -1) return
 
@@ -683,6 +795,61 @@ function App() {
     void reorderVisibleTasks(currentDrag.taskId, currentDrag.targetIndex)
     activeDragRef.current = null
     setDragState(null)
+  }
+
+  function renderTask(task) {
+    const index = renderedTaskIndexes.get(task.id)
+    const state = getTaskState(task)
+    const isDragging = dragState?.taskId === task.id
+    const dragOffset = isDragging ? dragState.currentY - dragState.startY : 0
+
+    return (
+      <div className="task-drop-row" key={task.id}>
+        {dragState?.targetIndex === index ? <div className="drop-indicator" /> : null}
+        <article
+          ref={(node) => setTaskItemRef(task.id, node)}
+          className={`task-item ${state} priority-${task.priority} ${
+            isDragging ? 'is-dragging' : ''
+          }`}
+          style={
+            isDragging
+              ? { transform: `translateY(${dragOffset}px) scale(1.01)` }
+              : undefined
+          }
+          onPointerDown={(event) => startLongPress(event, task.id)}
+          onPointerMove={updateDrag}
+          onPointerUp={finishDrag}
+          onPointerCancel={cancelDrag}
+        >
+          <button
+            type="button"
+            className="check-button"
+            onClick={() => toggleTask(task.id)}
+            aria-label={task.completed ? '\u6807\u8bb0\u4e3a\u672a\u5b8c\u6210' : '\u6807\u8bb0\u4e3a\u5b8c\u6210'}
+          >
+            {task.completed ? '\u2713' : ''}
+          </button>
+          <div className="task-body">
+            <div className="task-title-row">
+              <h3>{task.title}</h3>
+              <span className={`priority ${task.priority}`}>
+                {priorityLabels[task.priority]}
+              </span>
+            </div>
+            {task.notes ? <p className="notes">{task.notes}</p> : null}
+            <p className="due-time">{formatDueTime(task.dueAt)}</p>
+          </div>
+          <button
+            type="button"
+            className="delete-button"
+            onClick={() => deleteTask(task.id)}
+            aria-label="\u5220\u9664\u5f85\u529e"
+          >
+            {'\u00d7'}
+          </button>
+        </article>
+      </div>
+    )
   }
 
   if (!isSupabaseConfigured) return <SetupPanel />
@@ -736,6 +903,7 @@ function App() {
         {errorMessage ? <p className="status-message error">{errorMessage}</p> : null}
 
         <section className="content-grid">
+          <div className="side-column">
           <form className="task-form" onSubmit={addTask}>
             <h2>添加提醒</h2>
             <label>
@@ -783,6 +951,50 @@ function App() {
             </button>
           </form>
 
+          <section className="quote-card">
+            <div className="quote-card-copy">
+              <p>{'\u4eca\u65e5\u81ea\u52c9'}</p>
+              <h2>{'\u505a\u6709\u5fc3\u4eba'}</h2>
+              <h2>{'\u5e72\u56f0\u96be\u4e8b'}</h2>
+              <h2>{'\u7acb\u5927\u683c\u5c40'}</h2>
+            </div>
+
+            <div className={`analytics-status is-${analyticsServiceStatus}`}>
+              {analyticsServiceStatus === 'online' ? (
+                <p>{'\u672c\u5730 Excel \u540c\u6b65\u5df2\u8fd0\u884c'}</p>
+              ) : (
+                <>
+                  <p>
+                    {analyticsServiceStatus === 'checking'
+                      ? '\u6b63\u5728\u68c0\u6d4b Excel \u540c\u6b65\u670d\u52a1...'
+                      : '\u540c\u6b65\u670d\u52a1\u672a\u8fd0\u884c\uff0c\u5b89\u88c5\u5f00\u673a\u81ea\u542f\u540e\u53ef\u81ea\u52a8\u6062\u590d\u3002'}
+                  </p>
+                  <div className="analytics-status-actions">
+                    <button type="button" className="note-toggle-button" onClick={checkAnalyticsService}>
+                      {'\u68c0\u6d4b\u670d\u52a1'}
+                    </button>
+                    <button
+                      type="button"
+                      className="note-toggle-button"
+                      onClick={() => setIsStartupHelpOpen((isOpen) => !isOpen)}
+                    >
+                      {isStartupHelpOpen ? '\u9690\u85cf\u8bf4\u660e' : '\u67e5\u770b\u5f00\u673a\u81ea\u542f\u8bf4\u660e'}
+                    </button>
+                  </div>
+                  {isStartupHelpOpen ? (
+                    <div className="startup-help">
+                      <p>{'\u53ea\u9700\u8981\u8fd0\u884c\u4e00\u6b21\u5b89\u88c5\u811a\u672c\uff1a'}</p>
+                      <code>
+                        {'powershell -ExecutionPolicy Bypass -File scripts/install-analytics-startup.ps1'}
+                      </code>
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+          </section>
+          </div>
+
           <section className="task-panel">
             <div className="panel-header">
               <h2>提醒列表</h2>
@@ -807,60 +1019,22 @@ function App() {
                 <div className="empty-state">这个分类里还没有待办。</div>
               ) : (
                 <>
-                  {visibleTasks.map((task, index) => {
-                    const state = getTaskState(task)
-                    const isDragging = dragState?.taskId === task.id
-                    const dragOffset = isDragging ? dragState.currentY - dragState.startY : 0
-
-                    return (
-                      <div className="task-drop-row" key={task.id}>
-                        {dragState?.targetIndex === index ? <div className="drop-indicator" /> : null}
-                        <article
-                          ref={(node) => setTaskItemRef(task.id, node)}
-                          className={`task-item ${state} priority-${task.priority} ${
-                            isDragging ? 'is-dragging' : ''
-                          }`}
-                          style={
-                            isDragging
-                              ? { transform: `translateY(${dragOffset}px) scale(1.01)` }
-                              : undefined
-                          }
-                          onPointerDown={(event) => startLongPress(event, task.id)}
-                          onPointerMove={updateDrag}
-                          onPointerUp={finishDrag}
-                          onPointerCancel={cancelDrag}
-                        >
-                          <button
-                            type="button"
-                            className="check-button"
-                            onClick={() => toggleTask(task.id)}
-                            aria-label={task.completed ? '标记为未完成' : '标记为完成'}
-                          >
-                            {task.completed ? '✓' : ''}
-                          </button>
-                          <div className="task-body">
-                            <div className="task-title-row">
-                              <h3>{task.title}</h3>
-                              <span className={`priority ${task.priority}`}>
-                                {priorityLabels[task.priority]}
-                              </span>
-                            </div>
-                            {task.notes ? <p className="notes">{task.notes}</p> : null}
-                            <p className="due-time">{formatDueTime(task.dueAt)}</p>
-                          </div>
-                          <button
-                            type="button"
-                            className="delete-button"
-                            onClick={() => deleteTask(task.id)}
-                            aria-label="删除待办"
-                          >
-                            ×
-                          </button>
-                        </article>
+                  {groupedTaskSections.map((section) => (
+                    <section className="task-time-section" key={section.id}>
+                      <div className="task-time-section-header">
+                        <h3>{section.label}</h3>
+                        <span>{section.tasks.length} {'\u9879'}</span>
                       </div>
-                    )
-                  })}
-                  {dragState?.targetIndex === visibleTasks.length ? (
+                      <div className="task-time-section-body">
+                        {section.tasks.length > 0 ? (
+                          section.tasks.map((task) => renderTask(task))
+                        ) : (
+                          <div className="time-section-empty">{'\u6682\u65e0\u4efb\u52a1'}</div>
+                        )}
+                      </div>
+                    </section>
+                  ))}
+                  {dragState?.targetIndex === renderedVisibleTasks.length ? (
                     <div className="drop-indicator trailing" />
                   ) : null}
                 </>
